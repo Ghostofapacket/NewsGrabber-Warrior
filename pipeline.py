@@ -79,6 +79,7 @@ PYTHON3_EXE = find_executable(
     "Python",
     re.compile(r"^Python 3\."),
     [
+        "/usr/local/bin/python3",
         "python",
         "python3",
     ]
@@ -94,7 +95,7 @@ if not YOUTUBE_DL_EXE:
 #
 # Update this each time you make a non-cosmetic change.
 # It will be added to the WARC files and reported to the tracker.
-VERSION = "20190702.01"
+VERSION = "20190711.01"
 TRACKER_ID = 'newsgrabber'
 TRACKER_HOST = 'tracker.archiveteam.org'
 
@@ -170,16 +171,18 @@ class MoveFiles(SimpleTask):
 
         shutil.rmtree("%(item_dir)s" % item)
 
-
-
-class DeduplicateWarcExtProc(SimpleTask):
-    def __init__(self):
-        SimpleTask.__init__(self, "DeduplicateWarcExtProc")
-
-    def process(self, item):
-        sourcewarc = "%(item_dir)s/%(warc_file_base)s.warc.gz" % item
-        destwarc = "%(item_dir)s/%(warc_file_base)s-deduplicated.warc.gz" % item
-        call(["python", "-u", "dedupe.py", sourcewarc, destwarc])
+class DeduplicateWarcExtProc(ExternalProcess):
+    '''Deduplicate warc and capture exceptions.'''
+    def __init__(self, sourcewarc, destwarc):
+        args = [
+            PYTHON3_EXE,
+            "-u",
+            "dedupe.py",
+            str(sourcewarc),
+            str(destwarc)
+        ]
+        ExternalProcess.__init__(self, "DeduplicateWarcExtProc",
+                                 args=args,)
 
 def get_hash(filename):
     with open(filename, 'rb') as in_file:
@@ -236,7 +239,8 @@ class WgetArgs(object):
             '--warc-header', 'operator: Archive Team',
             '--warc-header', 'newsgrabber-dld-script-version: ' + VERSION,
             '--warc-header', ItemInterpolation('ftp-item: %(item_name)s'),
-            '--reject-regex', r'(^https?://launcher\.spot\.im/spot/(www\.spot\.im/launcher/|launcher\.spot\.im/|modules/launcher/){3,}bundle\.js)|(https?://static\.xx\.fbcdn\.net/rsrc\.php/)',
+            '--reject-regex', r'(^https?://launcher\.spot\.im/spot/(www\.spot\.im/launcher/|launcher\.spot\.im/|modules/launcher/){3,}bundle\.js)|(mp3.cbc.ca|www.cbc.ca)|(https?://static\.xx\.fbcdn\.net/rsrc
+\.php/)',
             '--proxy-server-address', '127.0.0.1'
         ]
 
@@ -286,11 +290,9 @@ pipeline = Pipeline(
         max_tries=2,
         accept_on_exit_code=[0, 4, 8]
     ),
-    LimitConcurrent(
-        NumberConfigValue(min=1, max=20, default="1",
-            name="shared:dedupe_threads", title="Deduplicate threads",
-            description="The maximum number of concurrent dedupes."),
-        DeduplicateWarcExtProc(),
+    DeduplicateWarcExtProc(
+       ItemInterpolation("%(item_dir)s/%(warc_file_base)s.sourcewarc.gz"),
+       ItemInterpolation("%(item_dir)s/%(warc_file_base)s-destdeduplicated.warc.gz")
     ),
     PrepareStatsForTracker(
         defaults={"downloader": downloader, "version": VERSION},
