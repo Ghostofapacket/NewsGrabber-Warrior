@@ -173,16 +173,9 @@ class MoveFiles(SimpleTask):
 
 class DeduplicateWarcExtProc(ExternalProcess):
     '''Deduplicate warc and capture exceptions.'''
-    def __init__(self, sourcewarc, destwarc):
-        args = [
-            PYTHON3_EXE,
-            "-u",
-            "dedupe.py",
-            str(sourcewarc),
-            str(destwarc)
-        ]
+    def __init__(self, args):
         ExternalProcess.__init__(self, "DeduplicateWarcExtProc",
-                                 args=args,)
+            args=args,)
 
 def get_hash(filename):
     with open(filename, 'rb') as in_file:
@@ -202,6 +195,19 @@ def stats_id_function(item):
     }
 
     return d
+
+class DedupeArgs(object):
+    def realize(self, item):
+        item_name = item['item_name']
+
+        dedupe_args = [
+            PYTHON3_EXE,
+            "-u",
+            "dedupe.py",
+            ItemInterpolation("%(item_dir)s/%(warc_file_base)s.warc.gz"),
+            ItemInterpolation("%(item_dir)s/%(warc_file_base)s-deduplicated.warc.gz")
+        ]
+        return realize(dedupe_args, item)
 
 class WgetArgs(object):
     def realize(self, item):
@@ -239,8 +245,7 @@ class WgetArgs(object):
             '--warc-header', 'operator: Archive Team',
             '--warc-header', 'newsgrabber-dld-script-version: ' + VERSION,
             '--warc-header', ItemInterpolation('ftp-item: %(item_name)s'),
-            '--reject-regex', r'(^https?://launcher\.spot\.im/spot/(www\.spot\.im/launcher/|launcher\.spot\.im/|modules/launcher/){3,}bundle\.js)|(mp3.cbc.ca|www.cbc.ca)|(https?://static\.xx\.fbcdn\.net/rsrc
-\.php/)',
+            '--reject-regex', r'(^https?://launcher\.spot\.im/spot/(www\.spot\.im/launcher/|launcher\.spot\.im/|modules/launcher/){3,}bundle\.js)|(mp3.cbc.ca|www.cbc.ca)|(https?://static\.xx\.fbcdn\.net/rsrc\.php/)',
             '--proxy-server-address', '127.0.0.1'
         ]
 
@@ -291,8 +296,7 @@ pipeline = Pipeline(
         accept_on_exit_code=[0, 4, 8]
     ),
     DeduplicateWarcExtProc(
-       ItemInterpolation("%(item_dir)s/%(warc_file_base)s.warc.gz"),
-       ItemInterpolation("%(item_dir)s/%(warc_file_base)s-deduplicated.warc.gz")
+        DedupeArgs()
     ),
     PrepareStatsForTracker(
         defaults={"downloader": downloader, "version": VERSION},
