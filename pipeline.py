@@ -291,8 +291,8 @@ pipeline = Pipeline(
         accept_on_exit_code=[0, 4, 8]
     ),
     DeduplicateWarcExtProc(
-       ItemInterpolation("%(item_dir)s/%(warc_file_base)s.sourcewarc.gz"),
-       ItemInterpolation("%(item_dir)s/%(warc_file_base)s-destdeduplicated.warc.gz")
+       ItemInterpolation("%(item_dir)s/%(warc_file_base)s.warc.gz"),
+       ItemInterpolation("%(item_dir)s/%(warc_file_base)s-deduplicated.warc.gz")
     ),
     PrepareStatsForTracker(
         defaults={"downloader": downloader, "version": VERSION},
