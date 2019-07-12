@@ -1,8 +1,9 @@
+import aiohttp
+import asyncio
 import datetime
 import os
 import re
 import urllib.parse
-import requests
 
 from warcio.archiveiterator import ArchiveIterator
 from warcio.warcwriter import WARCWriter
@@ -22,10 +23,18 @@ class Warc:
         if os.path.isfile(self.warc_target):
             self._log.log('File {} already exists.'.format(self.warc_target))
             raise Exception('File {} already exists.'.format(self.warc_target))
-        self._session = requests.Session()
 
     def deduplicate(self):
         self._log.log('Start deduplication process.')
+
+        iaData = {} # dict of (payload digest, URL) => IA response|None
+        with open(self.warc_source, 'rb') as s:
+            for record in ArchiveIterator(s):
+                if record.rec_headers.get_header('WARC-Type') == 'response':
+                    iaData[(record.rec_headers.get_header('WARC-Payload-Digest'), record.rec_headers.get_header('WARC-Target-URI'))] = None
+
+        self.fetch_from_ia(iaData)
+
         with open(self.warc_source, 'rb') as s, \
                 open(self.warc_target, 'wb') as t:
             writer = WARCWriter(filebuf=t, gzip=self.warc_target.endswith('.gz'))
@@ -40,16 +49,16 @@ class Warc:
                     record.rec_headers.replace_header('WARC-Target-URI', url)
                 if record.rec_headers.get_header('WARC-Type') == 'response':
                     self._log.log('Deduplicating record {}.'.format(record_id))
-                    data = self.get_duplicate(record)
-                    print(data)
-                    if data:
+                    key = (record.rec_headers.get_header('WARC-Payload-Digest'), record.rec_headers.get_header('WARC-Target-URI'))
+                    assert key in iaData
+                    if iaData[key]:
                         self._log.log('Record {} is a duplicate from {}.'
-                                      .format(record_id, data))
+                                      .format(record_id, iaData[key]))
                         writer.write_record(
-                            self.response_to_revisit(writer, record, data)
+                            self.response_to_revisit(writer, record, iaData[key])
                         )
                     else:
-                        if data is False:
+                        if iaData[key] is False:
                             self._log.log('Record {} could not be deduplicated.'
                                 .format(record_id))
                         else:
@@ -99,69 +108,65 @@ class Warc:
             http_headers=record.http_headers
         )
 
-    def get_duplicate(self, record):
-        key = (
-            record.rec_headers.get_header('WARC-Payload-Digest'),
-            record.rec_headers.get_header('WARC-Target-URI')
-        )
-        if key in self._response_records:
-            return self._response_records[key]
-#        date = record.rec_headers.get_header('WARC-Date')
-#        date = datetime.datetime.strptime(date, '%Y-%m-%dT%H:%M:%SZ')
-#        date = date.strftime('%Y%m%d%H%M%S')
-        api_response = self.get_ia_duplicate(record,range='to',date='201905310000')
-        if api_response:
-            return api_response
-        api_response = self.get_ia_duplicate(record,range='from',date='20190703000')
-        if api_response:
-            return api_response
-        return
+    async def fetch_single(self, key, session):
+        digest, uri = key
+        for tofrom, date in (('to', '201905310000'), ('from', '20190703000')):
+            for i in range(10):
+                try:
+                    async with session.get(
+                      'http://wwwb-dedup.us.archive.org:8083/cdx/search'
+                      '?url={}'.format(urllib.parse.quote(uri)) +
+                      '&limit=100'
+                      '&filter=digest:{}'.format(digest.split(':')[1]) +
+                      '&fl=timestamp,original'
+                      '&{}={}'.format(tofrom, date) +
+                      '&filter=!mimetype:warc\/revisit') as resp:
+                        return key, await resp.text()
+                except aiohttp.ClientError as e:
+                    pass
+        return key, None
 
-    def get_ia_duplicate(self, record, range, date):
-        digest = record.rec_headers.get_header('WARC-Payload-Digest')
-        uri = record.rec_headers.get_header('WARC-Target-URI')
-        record_id = record.rec_headers.get_header('WARC-Record-ID')
-        self._log.log('Requesting URL http://wwwb-dedup.us.archive.org:8083/cdx/search'
-            '?url={}'.format(urllib.parse.quote(uri)) +
-            '&limit=100'
-            '&filter=digest:{}'.format(digest.split(':')[1]) +
-            '&fl=timestamp,original'
-            '&{}={}'.format(range,int(date) - 1) +
-            '&filter=!mimetype:warc\/revisit')
-        success, response = get(
-            'http://wwwb-dedup.us.archive.org:8083/cdx/search'
-            '?url={}'.format(urllib.parse.quote(uri)) +
-            '&limit=100'
-            '&filter=digest:{}'.format(digest.split(':')[1]) +
-            '&fl=timestamp,original'
-            '&{}={}'.format(range,int(date) - 1) +
-            '&filter=!mimetype:warc\/revisit',
-            sleep_time=1,
-            max_tries=10,
-            timeout=10,
-            session=self._session
-        )
-        self._log.log('Received a response from URL {}.'.format(response.url))
-        if len(response.text.strip()) == 0:
+    async def fetch_from_ia_async(self, iaData):
+        async with aiohttp.ClientSession(connector = aiohttp.TCPConnector(limit = 10)) as session:
+            pending = []
+            for key in iaData:
+                pending.append(asyncio.ensure_future(self.fetch_single(key, session)))
+
+            done, pending = await asyncio.wait(pending)
+            assert len(pending) == 0
+            for task in done:
+                key, response = await task
+                iaData[key] = self.parse_ia_response(key, response)
+
+    def fetch_from_ia(self, iaData: dict):
+        self._log.log('Fetching dedupe info from IA')
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(self.fetch_from_ia_async(iaData))
+        loop.close()
+        self._log.log('Fetched dedupe info from IA')
+
+    def parse_ia_response(self, key, response):
+        # Parse response (str or None), returns False if an error occurred, None if there is no previous record, or a dict if there is.
+        if response is None:
+            self._log.log('Key {} got no or a bad CDX API response.'.format(key))
+            return False
+        if len(response.strip()) == 0:
             return None
-        if 'org.archive.wayback.exception.RobotAccessControlException' in response.text:
-            self._log.log('Record {} is blocked by robots.txt.'.format(record_id))
+        if 'org.archive.wayback.exception.RobotAccessControlException' in response:
+            self._log.log('Key {} is blocked by robots.txt.'.format(key))
             return False
-        if 'org.archive.wayback.exception.AdministrativeAccessControlException' in response.text:
-            self._log.log('Record {} is excluded from the CDX API.'.format(record_id))
+        if 'org.archive.wayback.exception.AdministrativeAccessControlException' in response:
+            self._log.log('Key {} is excluded from the CDX API.'.format(key))
             return False
-        if 'Requested Line is too large' in response.text:
-            self._log.log('Record {} has a too large URL.'.format(record_id))
+        if 'Requested Line is too large' in response:
+            self._log.log('Key {} has a too large URL.'.format(key))
             return False
-        if not success:
-            self._log.log('Record {} got a bad CDX API response.'.format(record_id))
-            return False
-        for line in response.text.splitlines():
+        for line in response.splitlines():
             if not re.search('^[0-9]{14}\s+https?://', line):
                 continue
             break
         else:
-            self._log.log('Record {} for an invalid CDX API response'.format(record_id))
+            self._log.log('Key {} for an invalid CDX API response'.format(key))
             return False
         data = line.strip().split(' ', 1)
         return {
