@@ -166,8 +166,8 @@ class MoveFiles(SimpleTask):
         SimpleTask.__init__(self, "MoveFiles")
 
     def process(self, item):
-        os.rename("%(item_dir)s/%(warc_file_base)s-deduplicated.warc.gz" % item,
-              "%(data_dir)s/%(warc_file_base)s-deduplicated.warc.gz" % item)
+        os.rename("%(item_dir)s/%(warc_file_base)s.deduplicated.warc.gz" % item,
+              "%(data_dir)s/%(warc_file_base)s.deduplicated.warc.gz" % item)
 
         shutil.rmtree("%(item_dir)s" % item)
 
@@ -203,9 +203,8 @@ class DedupeArgs(object):
         dedupe_args = [
             PYTHON3_EXE,
             "-u",
-            "dedupe.py",
+            "main.py",
             ItemInterpolation("%(item_dir)s/%(warc_file_base)s.warc.gz"),
-            ItemInterpolation("%(item_dir)s/%(warc_file_base)s-deduplicated.warc.gz")
         ]
         return realize(dedupe_args, item)
 
@@ -302,7 +301,7 @@ pipeline = Pipeline(
         defaults={"downloader": downloader, "version": VERSION},
         file_groups={
             "data": [
-                 ItemInterpolation("%(item_dir)s/%(warc_file_base)s-deduplicated.warc.gz")
+                 ItemInterpolation("%(item_dir)s/%(warc_file_base)s.deduplicated.warc.gz")
             ]
         },
         id_function=stats_id_function,
@@ -317,7 +316,7 @@ pipeline = Pipeline(
             downloader=downloader,
             version=VERSION,
             files=[
-                ItemInterpolation("%(data_dir)s/%(warc_file_base)s-deduplicated.warc.gz")
+                ItemInterpolation("%(data_dir)s/%(warc_file_base)s.deduplicated.warc.gz")
             ],
             rsync_target_source_path=ItemInterpolation("%(data_dir)s/"),
             rsync_extra_args=[
