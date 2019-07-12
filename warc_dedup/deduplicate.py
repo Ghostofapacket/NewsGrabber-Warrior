@@ -1,16 +1,5 @@
-import datetime
-import os
-import re
-import urllib.parse
-
-from warcio.archiveiterator import ArchiveIterator
-from warcio.warcwriter import WARCWriter
-
-from warc_dedup.log import Log
-from warc_dedup.utils import get
-
-
-class Warc:
+import datetime import os import re import urllib.parse from warcio.archiveiterator import ArchiveIterator from warcio.warcwriter import WARCWriter from warc_dedup.log import Log from 
+warc_dedup.utils import get class Warc:
     def __init__(self, warc_source: str, warc_target: str=None):
         self.warc_source = warc_source
         self.warc_target = warc_target
@@ -21,7 +10,6 @@ class Warc:
         if os.path.isfile(self.warc_target):
             self._log.log('File {} already exists.'.format(self.warc_target))
             raise Exception('File {} already exists.'.format(self.warc_target))
-
     def deduplicate(self):
         self._log.log('Start deduplication process.')
         with open(self.warc_source, 'rb') as s, \
@@ -63,7 +51,6 @@ class Warc:
                     writer.write_record(record)
             self._log.log('Writing log to WARC.')
             writer.write_record(self._log.create_record(writer))
-
     def register_response(self, record):
         key = (
             record.rec_headers.get_header('WARC-Payload-Digest'),
@@ -74,7 +61,6 @@ class Warc:
             'date': record.rec_headers.get_header('WARC-Date'),
             'target-uri': record.rec_headers.get_header('WARC-Target-URI')
         }
-
     @staticmethod
     def response_to_revisit(writer, record, data):
         warc_headers = record.rec_headers
@@ -96,7 +82,6 @@ class Warc:
             warc_headers=warc_headers,
             http_headers=record.http_headers
         )
-
     def get_duplicate(self, record):
         key = (
             record.rec_headers.get_header('WARC-Payload-Digest'),
@@ -104,21 +89,25 @@ class Warc:
         )
         if key in self._response_records:
             return self._response_records[key]
-#        date = record.rec_headers.get_header('WARC-Date')
-#        date = datetime.datetime.strptime(date, '%Y-%m-%dT%H:%M:%SZ')
-#        date = date.strftime('%Y%m%d%H%M%S')
-        if get_ia_duplicate(self,record,range='to',date='201905310000'):
-            return self.get_ia_duplicate(record)
-        elif get_ia_duplicate(self,record,range='from',date='20190703000'):
-            return self.get_ia_duplicate(record)
-        else:
-            return self.get_ia_duplicate(record)
-
+#        date = record.rec_headers.get_header('WARC-Date') date = datetime.datetime.strptime(date, '%Y-%m-%dT%H:%M:%SZ') date = date.strftime('%Y%m%d%H%M%S')
+        api_response = self.get_ia_duplicate(record,range='to',date='201905310000')
+        if api_response:
+            return api_response
+        api_response = self.get_ia_duplicate(record,range='from',date='20190703000')
+        if api_response:
+            return api_response
+        return False
     def get_ia_duplicate(self, record, range, date):
         digest = record.rec_headers.get_header('WARC-Payload-Digest')
         uri = record.rec_headers.get_header('WARC-Target-URI')
         record_id = record.rec_headers.get_header('WARC-Record-ID')
-        self._log.log('Requesting URL {}.'.format(response.url))
+        self._log.log('Requesting URL http://wwwb-dedup.us.archive.org:8083/cdx/search'
+            '?url={}'.format(urllib.parse.quote(uri)) +
+            '&limit=100'
+            '&filter=digest:{}'.format(digest.split(':')[1]) +
+            '&fl=timestamp,original'
+            '&{}={}'.format(range,int(date) - 1) +
+            '&filter=!mimetype:warc\/revisit')
         success, response = get(
             'http://wwwb-dedup.us.archive.org:8083/cdx/search'
             '?url={}'.format(urllib.parse.quote(uri)) +
@@ -159,21 +148,15 @@ class Warc:
             'date': datetime.datetime.strptime(data[0], '%Y%m%d%H%M%S'). \
                 strftime('%Y-%m-%dT%H:%M:%SZ')
         }
-
     @property
     def warc_target(self) -> str:
         return self._warc_target
-
     @warc_target.setter
     def warc_target(self, value: str):
         if value is not None:
             self._warc_target = value
-        self._warc_target = create_warc_target(self.warc_source)
-
-
-def create_warc_target(warc_source: str) -> str:
+        self._warc_target = create_warc_target(self.warc_source) def create_warc_target(warc_source: str) -> str:
     if warc_source.endswith('.warc.gz'):
         return warc_source.rsplit('.', 2)[0] + '.deduplicated.warc.gz'
     elif warc_source.endswith('.warc'):
         return warc_source.rsplit('.', 1)[0] + '.deduplicated.warc'
-
