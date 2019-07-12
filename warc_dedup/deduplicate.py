@@ -104,12 +104,17 @@ class Warc:
         )
         if key in self._response_records:
             return self._response_records[key]
-        return self.get_ia_duplicate(record)
+#        date = record.rec_headers.get_header('WARC-Date')
+#        date = datetime.datetime.strptime(date, '%Y-%m-%dT%H:%M:%SZ')
+#        date = date.strftime('%Y%m%d%H%M%S')
+        if get_ia_duplicate(self,record,range='to',date='201905310000'):
+            return self.get_ia_duplicate(record)
+        elif get_ia_duplicate(self,record,range='from',date='20190703000'):
+            return self.get_ia_duplicate(record)
+        else:
+            return self.get_ia_duplicate(record)
 
-    def get_ia_duplicate(self, record):
-        date = record.rec_headers.get_header('WARC-Date')
-        date = datetime.datetime.strptime(date, '%Y-%m-%dT%H:%M:%SZ')
-        date = date.strftime('%Y%m%d%H%M%S')
+    def get_ia_duplicate(self, record, range, date):
         digest = record.rec_headers.get_header('WARC-Payload-Digest')
         uri = record.rec_headers.get_header('WARC-Target-URI')
         record_id = record.rec_headers.get_header('WARC-Record-ID')
@@ -119,7 +124,7 @@ class Warc:
             '&limit=100'
             '&filter=digest:{}'.format(digest.split(':')[1]) +
             '&fl=timestamp,original'
-            '&to={}'.format(int(date) - 1) +
+            '&{}={}'.format(range,int(date) - 1) +
             '&filter=!mimetype:warc\/revisit',
             sleep_time=1,
             max_tries=10,
