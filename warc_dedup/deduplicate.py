@@ -115,7 +115,7 @@ class Warc:
         api_response = self.get_ia_duplicate(record,range='from',date='20190703000')
         if api_response:
             return api_response
-        return False
+        return
 
     def get_ia_duplicate(self, record, range, date):
         digest = record.rec_headers.get_header('WARC-Payload-Digest')
