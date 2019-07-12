@@ -2,6 +2,7 @@ import datetime
 import os
 import re
 import urllib.parse
+import requests
 
 from warcio.archiveiterator import ArchiveIterator
 from warcio.warcwriter import WARCWriter
@@ -21,6 +22,7 @@ class Warc:
         if os.path.isfile(self.warc_target):
             self._log.log('File {} already exists.'.format(self.warc_target))
             raise Exception('File {} already exists.'.format(self.warc_target))
+        self._session = requests.Session()
 
     def deduplicate(self):
         self._log.log('Start deduplication process.')
@@ -136,7 +138,8 @@ class Warc:
             '&filter=!mimetype:warc\/revisit',
             sleep_time=1,
             max_tries=10,
-            timeout=10
+            timeout=10,
+            session=self._session
         )
         self._log.log('Received a response from URL {}.'.format(response.url))
         if len(response.text.strip()) == 0:
