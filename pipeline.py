@@ -84,6 +84,16 @@ PYTHON3_EXE = find_executable(
         "python3",
     ]
 )
+PYTHON35_EXE = find_executable(
+    "Python 3.5",
+    re.compile(r"^Python 3\.5"),
+    [
+        "/usr/local/bin/python3.5",
+        "python3.5",
+        "python3",
+        "python",
+    ]
+)
 
 if not WPULL_EXE:
     raise Exception("No usable Wpull found.")
@@ -201,7 +211,7 @@ class DedupeArgs(object):
         item_name = item['item_name']
 
         dedupe_args = [
-            PYTHON3_EXE,
+            PYTHON35_EXE,
             "-u",
             "deduplicate.py",
             ItemInterpolation("%(item_dir)s/%(warc_file_base)s.warc.gz"),
