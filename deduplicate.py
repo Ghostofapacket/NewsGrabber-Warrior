@@ -1,4 +1,5 @@
 import sys
+sys.path.append('/usr/local/lib/python3.4/site-packages/')
 
 from warc_dedup import deduplicate
 
