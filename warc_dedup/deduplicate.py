@@ -1,37 +1,29 @@
-# encoding=utf8
 import datetime
 import os
-import requests
 import re
-import random
-import time
 import urllib.parse
-from django.core.validators import URLValidator
-from django.core.exceptions import ValidationError
-from django.conf import settings as djangosettings
 
 from warcio.archiveiterator import ArchiveIterator
 from warcio.warcwriter import WARCWriter
 
 from warc_dedup.log import Log
+from warc_dedup.utils import get
 
 
 class Warc:
-    def __init__(self, warc_source: str, warc_target: str = None):
+    def __init__(self, warc_source: str, warc_target: str=None):
         self.warc_source = warc_source
         self.warc_target = warc_target
         self._response_records = {}
         self._log = Log()
         self._log.log('Original WARC file is {}.'.format(self.warc_source))
         self._log.log('Deduplicated WARC file is {}.'.format(self.warc_target))
-        djangosettings.configure(DEBUG=False)
         if os.path.isfile(self.warc_target):
             self._log.log('File {} already exists.'.format(self.warc_target))
             raise Exception('File {} already exists.'.format(self.warc_target))
 
     def deduplicate(self):
         self._log.log('Start deduplication process.')
-        print('Start deduplication process.')
         with open(self.warc_source, 'rb') as s, \
                 open(self.warc_target, 'wb') as t:
             writer = WARCWriter(filebuf=t, gzip=self.warc_target.endswith('.gz'))
@@ -45,15 +37,22 @@ class Warc:
                                   .format(record_id, url))
                     record.rec_headers.replace_header('WARC-Target-URI', url)
                 if record.rec_headers.get_header('WARC-Type') == 'response':
+                    self._log.log('Deduplicating record {}.'.format(record_id))
                     data = self.get_duplicate(record)
+                    print(data)
                     if data:
-                        self._log.log('Record {} is duplicate from {}.'
+                        self._log.log('Record {} is a duplicate from {}.'
                                       .format(record_id, data))
-                        print('URL {} is a duplicate - Writing record'.format(url))
                         writer.write_record(
                             self.response_to_revisit(writer, record, data)
                         )
                     else:
+                        if data is False:
+                            self._log.log('Record {} could not be deduplicated.'
+                                .format(record_id))
+                        else:
+                            self._log.log('Record {} is not a duplicate.'
+                                .format(record_id))
                         self.register_response(record)
                         writer.write_record(record)
                 elif record.rec_headers.get_header('WARC-Type') == 'warcinfo':
@@ -107,72 +106,51 @@ class Warc:
             return self._response_records[key]
         return self.get_ia_duplicate(record)
 
-    @staticmethod
-    def get_ia_duplicate(record):
-        tries = 0
-        delay = 0
-        url_re = re.compile('[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)')
+    def get_ia_duplicate(self, record):
         date = record.rec_headers.get_header('WARC-Date')
         date = datetime.datetime.strptime(date, '%Y-%m-%dT%H:%M:%SZ')
         date = date.strftime('%Y%m%d%H%M%S')
         digest = record.rec_headers.get_header('WARC-Payload-Digest')
         uri = record.rec_headers.get_header('WARC-Target-URI')
-        print('Processing URL {}.'.format(uri))
-        while True:
-            try:
-                if tries <= 9:
-                    pass
-                else:
-                    raise Exception('Internet Archive Deduplication CDX API Offline - Aborting')
-                tries += 1
-                r = requests.get(
-                    'http://wwwb-dedup.us.archive.org:8083/cdx/search/'
-                    '?url={}'.format(urllib.parse.quote(uri)) +
-                    '&limit=1'
-                    '&filter=digest:{}'.format(digest.split(':')[1]) +
-                    '&fl=original,timestamp'
-                    '&to={}'.format(int(date) - 1) +
-                    '&filter=!mimetype:warc\/revisit',
-                    timeout = 10
-                )
-            except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout, requests.exceptions.Timeout) as error:
-                print("Error connecting to wwwb-dedupe.us.archive.org/cdx/search - Sleeping for " + str(round(delay, 2)) \
-                     + " seconds.")
-                time.sleep(delay)
-                delay += delay + (random.randint(0,1000)/1000)
+        record_id = record.rec_headers.get_header('WARC-Record-ID')
+        success, response = get(
+            'http://wwwb-dedup.us.archive.org:8083/cdx/search'
+            '?url={}'.format(urllib.parse.quote(uri)) +
+            '&limit=100'
+            '&filter=digest:{}'.format(digest.split(':')[1]) +
+            '&fl=timestamp,original'
+            '&to={}'.format(int(date) - 1) +
+            '&filter=!mimetype:warc\/revisit',
+            sleep_time=1,
+            max_tries=10,
+            timeout=10
+        )
+        self._log.log('Requested URL {}.'.format(response.url))
+        if len(response.text.strip()) == 0:
+            return None
+        if 'org.archive.wayback.exception.RobotAccessControlException' in response.text:
+            self._log.log('Record {} is blocked by robots.txt.'.format(record_id))
+            return False
+        if 'org.archive.wayback.exception.AdministrativeAccessControlException' in response.text:
+            self._log.log('Record {} is excluded from the CDX API.'.format(record_id))
+            return False
+        if 'Requested Line is too large' in response.text:
+            self._log.log('Record {} has a too large URL.'.format(record_id))
+            return False
+        if not success:
+            self._log.log('Record {} got a bad CDX API response.'.format(record_id))
+            return False
+        for line in response.text.splitlines():
+            if not re.search('^[0-9]{14}\s+https?://', line):
                 continue
             break
-        r = r.text.strip()
-        if len(r) == 0:
-            return None
-        r = r.split(' ', 1)
-        if 'org.archive.wayback.exception.RobotAccessControlException' in r[1]:
-            print('{} is blocked by robots.txt, ignoring and treating as non duplicate'.format(uri))
-            return None
-        if 'Requested Line is too  large' in r[1]:
-            print('{} is too long for the API, Ignoring and treating as non duplicate'.format(uri))
-            return None
-        if not len(r[1]) == 14:
-            print('\n')
-            print('http://wwwb-dedup.us.archive.org:8083/cdx/search/'
-                    '?url={}'.format(uri) +
-                    '&limit=1'
-                    '&filter=digest:{}'.format(digest.split(':')[1]) +
-                    '&fl=original,timestamp'
-                    '&to={}'.format(int(date) - 1) +
-                    '&filter=!mimetype:warc\/revisit'
-                 )
-            print('Date received - ' + str(r[1]))
-            raise Exception('Got an invalid response from the Deduplication API - Aborting (Date out of range)' )
-        try:
-            URLValidator(str(r[0]))
-        except ValidationError as e:
-            print(e)
-            print('Expected ' + uri + " , Got " + str(r[0]))
-            raise Exception('Got an invalid response from the Deduplication API - Aborting (URL does not match)')
+        else:
+            self._log.log('Record {} for an invalid CDX API response'.format(record_id))
+            return False
+        data = line.strip().split(' ', 1)
         return {
-            'target-uri': r[0],
-            'date': datetime.datetime.strptime(r[1], '%Y%m%d%H%M%S'). \
+            'target-uri': data[1],
+            'date': datetime.datetime.strptime(data[0], '%Y%m%d%H%M%S'). \
                 strftime('%Y-%m-%dT%H:%M:%SZ')
         }
 
@@ -192,3 +170,4 @@ def create_warc_target(warc_source: str) -> str:
         return warc_source.rsplit('.', 2)[0] + '.deduplicated.warc.gz'
     elif warc_source.endswith('.warc'):
         return warc_source.rsplit('.', 1)[0] + '.deduplicated.warc'
+

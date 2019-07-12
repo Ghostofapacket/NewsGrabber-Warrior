@@ -203,7 +203,7 @@ class DedupeArgs(object):
         dedupe_args = [
             PYTHON3_EXE,
             "-u",
-            "main.py",
+            "deduplicate.py",
             ItemInterpolation("%(item_dir)s/%(warc_file_base)s.warc.gz"),
         ]
         return realize(dedupe_args, item)
