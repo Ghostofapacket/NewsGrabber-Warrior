@@ -118,6 +118,7 @@ class Warc:
         digest = record.rec_headers.get_header('WARC-Payload-Digest')
         uri = record.rec_headers.get_header('WARC-Target-URI')
         record_id = record.rec_headers.get_header('WARC-Record-ID')
+        self._log.log('Requesting URL {}.'.format(response.url))
         success, response = get(
             'http://wwwb-dedup.us.archive.org:8083/cdx/search'
             '?url={}'.format(urllib.parse.quote(uri)) +
@@ -130,7 +131,7 @@ class Warc:
             max_tries=10,
             timeout=10
         )
-        self._log.log('Requested URL {}.'.format(response.url))
+        self._log.log('Received a response from URL {}.'.format(response.url))
         if len(response.text.strip()) == 0:
             return None
         if 'org.archive.wayback.exception.RobotAccessControlException' in response.text:
