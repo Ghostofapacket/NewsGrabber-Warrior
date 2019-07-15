@@ -170,8 +170,7 @@ class PrepareDirectories(SimpleTask):
 
         open("%(item_dir)s/%(warc_file_base)s.warc.gz" % item, "w").close()
 
-
-class MoveFiles(SimpleTask):
+        class MoveFiles(SimpleTask):
     def __init__(self):
         SimpleTask.__init__(self, "MoveFiles")
 
@@ -180,7 +179,14 @@ class MoveFiles(SimpleTask):
               "%(data_dir)s/%(warc_file_base)s.deduplicated.warc.gz" % item)
 
         shutil.rmtree("%(item_dir)s" % item)
+        
+class DeleteFiles(SimpleTask):
+    def __init__(self):
+        SimpleTask.__init__(self, "DeleteFiles")
 
+    def process(self, item):
+        os.remove("data/completed/%(item_name)s.warc.gz" % item)
+        
 class DeduplicateWarcExtProc(ExternalProcess):
     '''Deduplicate warc and capture exceptions.'''
     def __init__(self, args):
@@ -336,6 +342,7 @@ pipeline = Pipeline(
             ]
         ),
     ),
+    DeleteFiles(),
     SendDoneToTracker(
         tracker_url="http://%s/%s" % (TRACKER_HOST, TRACKER_ID),
         stats=ItemValue("stats")
